@@ -2,59 +2,69 @@ import streamlit as st
 import pandas as pd
 import google.generativeai as genai
 
-# ตั้งค่า API Key
+# 1. ตั้งค่า Gemini API
 genai.configure(api_key=st.secrets.get("GEMINI_API_KEY", "your-gemini-key"))
 
-# สร้าง Gemini model
+# 2. โหลด Model
 model = genai.GenerativeModel(
-    model_name="gemini-1.5-flash",
-    system_instruction="คุณคือผู้ช่วยวิเคราะห์ข้อมูล CSV อย่างละเอียด พูดสุภาพและเข้าใจง่าย"
+    model_name="gemini-1.5-pro",
+    system_instruction="คุณคือผู้ช่วยวิเคราะห์ข้อมูล CSV ที่เก่งมาก พูดจาชัดเจน กระชับ และมีเหตุผล"
 )
 
-# สร้าง session chat ครั้งเดียว
-if "chat_session" not in st.session_state:
-    st.session_state.chat_session = model.start_chat(history=[])
+# 3. Session state
+if "chat" not in st.session_state:
+    st.session_state.chat = None
+if "df_summary" not in st.session_state:
+    st.session_state.df_summary = ""
+if "chat_log" not in st.session_state:
+    st.session_state.chat_log = []
 
-# โหลดไฟล์ CSV
-st.set_page_config(page_title="CSV Gemini Chatbot 🤖", layout="centered")
-st.title("📊 Chatbot คุยกับไฟล์ CSV (Gemini)")
+# 4. UI
+st.set_page_config(page_title="CSV Gemini Chatbot", layout="centered")
+st.title("🤖 Chatbot คุยกับข้อมูล CSV (Gemini)")
 
-uploaded_file = st.sidebar.file_uploader("📁 อัปโหลดไฟล์ CSV", type=["csv"])
+# 5. Upload CSV
+uploaded_file = st.file_uploader("📁 อัปโหลดไฟล์ .csv", type=["csv"])
 if uploaded_file:
-    # อ่าน DataFrame และโชว์ตัวอย่าง
     df = pd.read_csv(uploaded_file)
-    st.session_state.df = df
-    st.sidebar.success("✅ ไฟล์โหลดสำเร็จ")
+    st.write("👀 ตัวอย่างข้อมูล:")
     st.dataframe(df.head())
 
-    # แปลงไฟล์เป็น binary (สำหรับแนบกับ prompt)
-    file_data = uploaded_file.read()
-    csv_file_for_gemini = {
-        "mime_type": "text/csv",
-        "data": file_data
-    }
+    # แปลง DataFrame เป็นข้อความแบบย่อส่งให้โมเดล
+    summary_text = f"""
+นี่คือตัวอย่างข้อมูลจากไฟล์ CSV ที่ผู้ใช้อัปโหลด:
+- จำนวนแถว: {df.shape[0]} แถว
+- จำนวนคอลัมน์: {df.shape[1]} คอลัมน์
+- ชื่อคอลัมน์: {', '.join(df.columns)}
+- ตัวอย่าง 5 แถวแรก:
+{df.head().to_string(index=False)}
+"""
+    st.session_state.df_summary = summary_text
 
-    # รับข้อความจากผู้ใช้
-    prompt = st.chat_input("ถามคำถามเกี่ยวกับข้อมูลนี้...")
+    # สร้าง session แชท
+    st.session_state.chat = model.start_chat(
+        history=[
+            {"role": "user", "parts": [summary_text]},
+            {"role": "model", "parts": ["เข้าใจข้อมูลแล้วค่ะ คุณสามารถถามอะไรเกี่ยวกับไฟล์นี้ได้เลย 🙂"]}
+        ]
+    )
+    st.success("✅ พร้อมเริ่มสนทนาแล้ว")
 
-    # แสดงประวัติการสนทนา
-    for msg in st.session_state.chat_session.history:
-        with st.chat_message(msg.role):
-            st.markdown(msg.parts[0].text if hasattr(msg.parts[0], "text") else str(msg.parts[0]))
+# 6. แสดงประวัติแชท
+for msg in st.session_state.chat_log:
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
 
+# 7. แชท
+if st.session_state.chat:
+    prompt = st.chat_input("พิมพ์คำถามเกี่ยวกับไฟล์ CSV ได้เลย...")
     if prompt:
-        # แสดงข้อความผู้ใช้
         st.chat_message("user").markdown(prompt)
+        st.session_state.chat_log.append({"role": "user", "content": prompt})
 
-        # ส่ง prompt + CSV ให้ Gemini
         try:
-            response = st.session_state.chat_session.send_message(
-                [csv_file_for_gemini, prompt]
-            )
-            with st.chat_message("assistant"):
-                st.markdown(response.text)
-
+            response = st.session_state.chat.send_message(prompt)
+            st.chat_message("assistant").markdown(response.text)
+            st.session_state.chat_log.append({"role": "assistant", "content": response.text})
         except Exception as e:
             st.error(f"❌ เกิดข้อผิดพลาด: {e}")
-else:
-    st.info("กรุณาอัปโหลดไฟล์ .csv ก่อนเริ่มสนทนา")
