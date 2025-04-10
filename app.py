@@ -1,74 +1,66 @@
 import streamlit as st
 import pandas as pd
-import openai
+import google.generativeai as genai
 
-# CONFIG
-st.set_page_config(page_title="CSV Chatbot 🤖", layout="centered")
-st.title("🤖 CSV Chatbot")
+# --- CONFIG Gemini ---
+genai.configure(api_key=st.secrets.get("GEMINI_API_KEY", "YOUR_GEMINI_API_KEY"))
 
-# API Key (ใส่ใน secrets หรือตรงนี้ก็ได้)
-openai.api_key = st.secrets.get("OPENAI_API_KEY", "sk-...")
+# --- สร้าง Gemini Model แบบ multimodal ---
+model = genai.GenerativeModel(
+    model_name='gemini-1.5-flash',
+    system_instruction='คุณคือผู้ช่วยที่สามารถวิเคราะห์ข้อมูลจากไฟล์ CSV ได้อย่างเข้าใจง่าย'
+)
 
-# SESSION STATE
-if "messages" not in st.session_state:
-    st.session_state.messages = []
+# --- PAGE CONFIG ---
+st.set_page_config(page_title="CSV Chatbot (Gemini)", layout="centered")
+st.title("🤖 CSV Chatbot (Gemini)")
 
-if "df" not in st.session_state:
-    st.session_state.df = None
-    st.session_state.file_name = None
+# --- UPLOAD ---
+uploaded_file = st.file_uploader("📁 อัปโหลดไฟล์ .CSV", type=["csv"])
 
-# UPLOAD CSV
-uploaded_file = st.sidebar.file_uploader("📁 อัปโหลดไฟล์ CSV", type=["csv"])
 if uploaded_file:
+    st.success("✅ อัปโหลดไฟล์เรียบร้อย")
     df = pd.read_csv(uploaded_file)
-    st.session_state.df = df
-    st.session_state.file_name = uploaded_file.name
-    st.sidebar.success(f"✅ อัปโหลด: {uploaded_file.name}")
+    st.dataframe(df.head())
 
-# DISPLAY PREVIEW
-if st.session_state.df is not None:
-    with st.expander("👀 ดูข้อมูลตัวอย่าง"):
-        st.dataframe(st.session_state.df.head())
+    # แปลงไฟล์อัปโหลดให้เป็น bytes (ใช้เป็น part ของ Gemini multimodal)
+    file_bytes = uploaded_file.read()
+    uploaded_file.seek(0)  # รีเซ็ต pointer กลับ (สำหรับ pandas อ่านด้านบน)
 
-# CHAT
-for msg in st.session_state.messages:
-    with st.chat_message(msg["role"]):
-        st.markdown(msg["content"])
+    # รับ prompt จากผู้ใช้
+    user_prompt = st.chat_input("ถามอะไรก็ได้เกี่ยวกับข้อมูลในไฟล์นี้")
 
-user_input = st.chat_input("พิมพ์คำถามเกี่ยวกับข้อมูล CSV...")
+    # แสดงข้อความก่อนหน้า (chat history)
+    if "chat_history" not in st.session_state:
+        st.session_state.chat_history = []
 
-if user_input:
-    # แสดงข้อความของผู้ใช้
-    st.chat_message("user").markdown(user_input)
-    st.session_state.messages.append({"role": "user", "content": user_input})
+    for msg in st.session_state.chat_history:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
 
-    # สร้าง context จาก CSV
-    df_sample = st.session_state.df.head(20).to_csv(index=False) if st.session_state.df is not None else "ไม่มีข้อมูล CSV"
-    file_info = f"ชื่อไฟล์: {st.session_state.file_name}" if st.session_state.file_name else ""
+    if user_prompt:
+        # แสดง prompt ผู้ใช้
+        st.chat_message("user").markdown(user_prompt)
+        st.session_state.chat_history.append({"role": "user", "content": user_prompt})
 
-    system_prompt = f"""
-คุณเป็นผู้ช่วยอัจฉริยะที่สามารถเข้าใจข้อมูลจากไฟล์ CSV และตอบคำถามของผู้ใช้ได้อย่างแม่นยำ
+        # สร้าง Gemini multimodal content
+        contents = [
+            {
+                "mime_type": "text/csv",
+                "data": file_bytes
+            },
+            user_prompt
+        ]
 
-ข้อมูล CSV (ตัวอย่าง 20 แถวแรก):
-{file_info}
-{df_sample}
-"""
+        try:
+            response = model.generate_content(contents)
+            reply = response.text
+        except Exception as e:
+            reply = f"❌ เกิดข้อผิดพลาด: {e}"
 
-    # สร้างข้อความที่ส่งให้ GPT
-    messages = [
-        {"role": "system", "content": system_prompt},
-        *st.session_state.messages
-    ]
+        # แสดงตอบกลับ
+        st.chat_message("assistant").markdown(reply)
+        st.session_state.chat_history.append({"role": "assistant", "content": reply})
 
-    # เรียก OpenAI GPT
-    response = openai.ChatCompletion.create(
-        model="gpt-3.5-turbo",
-        messages=messages,
-        temperature=0.4,
-    )
-
-    bot_reply = response["choices"][0]["message"]["content"]
-
-    # แสดงข้อความบอท
-    st.chat_message("assistant").markdown(bot_reply)
-    st.session_state.messages.append({"role": "assistant", "content": bot_reply})
+else:
+    st.info("กรุณาอัปโหลดไฟล์ .csv ก่อนเริ่มใช้งานแชทบอท")
