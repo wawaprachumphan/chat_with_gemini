@@ -2,65 +2,59 @@ import streamlit as st
 import pandas as pd
 import google.generativeai as genai
 
-# --- CONFIG Gemini ---
-genai.configure(api_key=st.secrets.get("GEMINI_API_KEY", "YOUR_GEMINI_API_KEY"))
+# ตั้งค่า API Key
+genai.configure(api_key=st.secrets.get("GEMINI_API_KEY", "your-gemini-key"))
 
-# --- สร้าง Gemini Model แบบ multimodal ---
+# สร้าง Gemini model
 model = genai.GenerativeModel(
-    model_name='gemini-1.5-flash',
-    system_instruction='คุณคือผู้ช่วยที่สามารถวิเคราะห์ข้อมูลจากไฟล์ CSV ได้อย่างเข้าใจง่าย'
+    model_name="gemini-1.5-flash",
+    system_instruction="คุณคือผู้ช่วยวิเคราะห์ข้อมูล CSV อย่างละเอียด พูดสุภาพและเข้าใจง่าย"
 )
 
-# --- PAGE CONFIG ---
-st.set_page_config(page_title="CSV Chatbot (Gemini)", layout="centered")
-st.title("🤖 CSV Chatbot (Gemini)")
+# สร้าง session chat ครั้งเดียว
+if "chat_session" not in st.session_state:
+    st.session_state.chat_session = model.start_chat(history=[])
 
-# --- UPLOAD ---
-uploaded_file = st.file_uploader("📁 อัปโหลดไฟล์ .CSV", type=["csv"])
+# โหลดไฟล์ CSV
+st.set_page_config(page_title="CSV Gemini Chatbot 🤖", layout="centered")
+st.title("📊 Chatbot คุยกับไฟล์ CSV (Gemini)")
 
+uploaded_file = st.sidebar.file_uploader("📁 อัปโหลดไฟล์ CSV", type=["csv"])
 if uploaded_file:
-    st.success("✅ อัปโหลดไฟล์เรียบร้อย")
+    # อ่าน DataFrame และโชว์ตัวอย่าง
     df = pd.read_csv(uploaded_file)
+    st.session_state.df = df
+    st.sidebar.success("✅ ไฟล์โหลดสำเร็จ")
     st.dataframe(df.head())
 
-    # แปลงไฟล์อัปโหลดให้เป็น bytes (ใช้เป็น part ของ Gemini multimodal)
-    file_bytes = uploaded_file.read()
-    uploaded_file.seek(0)  # รีเซ็ต pointer กลับ (สำหรับ pandas อ่านด้านบน)
+    # แปลงไฟล์เป็น binary (สำหรับแนบกับ prompt)
+    file_data = uploaded_file.read()
+    csv_file_for_gemini = {
+        "mime_type": "text/csv",
+        "data": file_data
+    }
 
-    # รับ prompt จากผู้ใช้
-    user_prompt = st.chat_input("ถามอะไรก็ได้เกี่ยวกับข้อมูลในไฟล์นี้")
+    # รับข้อความจากผู้ใช้
+    prompt = st.chat_input("ถามคำถามเกี่ยวกับข้อมูลนี้...")
 
-    # แสดงข้อความก่อนหน้า (chat history)
-    if "chat_history" not in st.session_state:
-        st.session_state.chat_history = []
+    # แสดงประวัติการสนทนา
+    for msg in st.session_state.chat_session.history:
+        with st.chat_message(msg.role):
+            st.markdown(msg.parts[0].text if hasattr(msg.parts[0], "text") else str(msg.parts[0]))
 
-    for msg in st.session_state.chat_history:
-        with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
+    if prompt:
+        # แสดงข้อความผู้ใช้
+        st.chat_message("user").markdown(prompt)
 
-    if user_prompt:
-        # แสดง prompt ผู้ใช้
-        st.chat_message("user").markdown(user_prompt)
-        st.session_state.chat_history.append({"role": "user", "content": user_prompt})
-
-        # สร้าง Gemini multimodal content
-        contents = [
-            {
-                "mime_type": "text/csv",
-                "data": file_bytes
-            },
-            user_prompt
-        ]
-
+        # ส่ง prompt + CSV ให้ Gemini
         try:
-            response = model.generate_content(contents)
-            reply = response.text
+            response = st.session_state.chat_session.send_message(
+                [csv_file_for_gemini, prompt]
+            )
+            with st.chat_message("assistant"):
+                st.markdown(response.text)
+
         except Exception as e:
-            reply = f"❌ เกิดข้อผิดพลาด: {e}"
-
-        # แสดงตอบกลับ
-        st.chat_message("assistant").markdown(reply)
-        st.session_state.chat_history.append({"role": "assistant", "content": reply})
-
+            st.error(f"❌ เกิดข้อผิดพลาด: {e}")
 else:
-    st.info("กรุณาอัปโหลดไฟล์ .csv ก่อนเริ่มใช้งานแชทบอท")
+    st.info("กรุณาอัปโหลดไฟล์ .csv ก่อนเริ่มสนทนา")
